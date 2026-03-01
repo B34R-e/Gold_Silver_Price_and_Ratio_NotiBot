@@ -1,0 +1,10 @@
+{
+    "delta": {
+        "gold": "0.25%",
+        "silver": 0.1
+    },
+    "channels": [
+        "telegram"
+    ],
+    "poll_interval_seconds": 5
+}
