@@ -1,8 +1,12 @@
 """
 Notification Dispatcher + Channel Adapters (Telegram, Discord)
+Sử dụng asyncio Queue để gửi tin nhắn non-blocking.
 """
+import asyncio
 import logging
+import time
 from abc import ABC, abstractmethod
+from threading import Thread
 
 import requests
 
@@ -54,6 +58,12 @@ class TelegramAdapter(ChannelAdapter):
             if resp.status_code == 200:
                 logger.info("Telegram: message sent successfully")
                 return True
+            elif resp.status_code == 429:
+                # Telegram rate limit — đợi rồi retry
+                retry_after = resp.json().get("parameters", {}).get("retry_after", 5)
+                logger.warning(f"Telegram rate limited, retrying after {retry_after}s")
+                time.sleep(retry_after)
+                return self.send(message)  # retry 1 lần
             else:
                 logger.error(f"Telegram error {resp.status_code}: {resp.text}")
                 return False
@@ -92,12 +102,22 @@ class DiscordAdapter(ChannelAdapter):
 
 
 class NotificationDispatcher:
-    """Điều phối gửi message đến các kênh đã cấu hình"""
+    """
+    Điều phối gửi message đến các kênh đã cấu hình.
+    Sử dụng background thread + queue để không block event loop.
+    """
 
     def __init__(self, config: Config):
         self.config = config
         self._adapters: list[ChannelAdapter] = []
         self._init_adapters()
+
+        # Message queue (thread-safe)
+        from queue import Queue
+        self._queue: Queue = Queue()
+        self._worker_running = False
+        self._worker_thread: Thread | None = None
+        self._stats = {"sent": 0, "failed": 0, "queued": 0}
 
     def _init_adapters(self):
         """Khởi tạo adapters dựa trên config"""
@@ -116,25 +136,86 @@ class NotificationDispatcher:
             self._adapters.append(adapter)
             logger.info("Discord adapter initialized")
 
-    def send_alert(self, alert: Alert):
-        """Gửi alert đến tất cả kênh đã cấu hình"""
-        message = alert.format_message()
-        logger.info(f"Sending alert to {len(self._adapters)} channel(s)...")
+    def start_worker(self):
+        """Khởi động background worker thread cho message queue"""
+        self._worker_running = True
+        self._worker_thread = Thread(target=self._worker_loop, daemon=True)
+        self._worker_thread.start()
+        logger.info("Notification worker started (background thread)")
 
-        for adapter in self._adapters:
+    def stop_worker(self):
+        """Dừng worker thread"""
+        self._worker_running = False
+        if self._worker_thread:
+            self._worker_thread.join(timeout=5)
+        logger.info(
+            f"Notification worker stopped. "
+            f"Stats: {self._stats['sent']} sent, {self._stats['failed']} failed, "
+            f"{self._queue.qsize()} remaining in queue"
+        )
+
+    def _worker_loop(self):
+        """Background loop: lấy message từ queue và gửi"""
+        while self._worker_running or not self._queue.empty():
             try:
-                success = adapter.send(message)
-                if not success:
-                    # Retry 1 lần
-                    logger.info(f"Retrying {adapter.name()}...")
-                    adapter.send(message)
+                # Đợi message tối đa 1 giây, nếu không có thì tiếp tục loop
+                try:
+                    message = self._queue.get(timeout=1)
+                except Exception:
+                    continue
+
+                # Gửi đến tất cả adapters
+                for adapter in self._adapters:
+                    try:
+                        success = adapter.send(message)
+                        if success:
+                            self._stats["sent"] += 1
+                        else:
+                            self._stats["failed"] += 1
+                            # Retry 1 lần
+                            logger.info(f"Retrying {adapter.name()}...")
+                            if adapter.send(message):
+                                self._stats["sent"] += 1
+                            else:
+                                self._stats["failed"] += 1
+                    except Exception as e:
+                        self._stats["failed"] += 1
+                        logger.error(f"Failed to send via {adapter.name()}: {e}")
+
+                self._queue.task_done()
+
             except Exception as e:
-                logger.error(f"Failed to send via {adapter.name()}: {e}")
+                logger.error(f"Worker error: {e}")
+
+    def send_alert(self, alert: Alert):
+        """Đẩy alert vào queue (instant, không block)"""
+        message = alert.format_message()
+        self._enqueue(message)
 
     def send_message(self, message: str):
-        """Gửi tin nhắn tùy ý (dùng cho startup, error alerts...)"""
+        """Đẩy tin nhắn vào queue (instant, không block)"""
+        self._enqueue(message)
+
+    def send_message_sync(self, message: str):
+        """Gửi tin nhắn đồng bộ (chỉ dùng cho startup/shutdown)"""
         for adapter in self._adapters:
             try:
                 adapter.send(message)
             except Exception as e:
                 logger.error(f"Failed to send via {adapter.name()}: {e}")
+
+    def _enqueue(self, message: str):
+        """Thêm message vào queue"""
+        self._stats["queued"] += 1
+        queue_size = self._queue.qsize()
+        self._queue.put(message)
+        if queue_size > 5:
+            logger.warning(f"Message queue backing up: {queue_size + 1} pending")
+
+    @property
+    def queue_size(self) -> int:
+        return self._queue.qsize()
+
+    @property
+    def stats(self) -> dict:
+        return self._stats.copy()

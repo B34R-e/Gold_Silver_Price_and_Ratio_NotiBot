@@ -79,6 +79,7 @@ class NotiBot:
         p = self._latest_price
         gold_delta = self._format_delta(self.config.delta_gold)
         silver_delta = self._format_delta(self.config.delta_silver)
+        stats = self.dispatcher.stats
 
         self.cmd_listener.reply(
             f"📊 Trạng thái NotiBot\n"
@@ -90,7 +91,9 @@ class NotiBot:
             f"━━━━━━━━━━━━━━━━━━\n"
             f"⚙️ Delta Vàng: {gold_delta}\n"
             f"⚙️ Delta Bạc: {silver_delta}\n"
-            f"📡 Uptime: {self._price_count} updates received"
+            f"📡 {self._price_count} updates | "
+            f"📤 {stats['sent']} sent | ❌ {stats['failed']} failed | "
+            f"📬 {self.dispatcher.queue_size} queued"
         )
 
     def _cmd_delta(self, args: list[str]):
@@ -201,8 +204,11 @@ class NotiBot:
 
     async def run(self):
         """Chạy bot — WebSocket + Command polling + Heartbeat"""
-        # Gửi startup message
-        self.dispatcher.send_message(
+        # Khởi động notification worker (background thread)
+        self.dispatcher.start_worker()
+
+        # Gửi startup message (đồng bộ — phải gửi xong trước khi tiếp tục)
+        self.dispatcher.send_message_sync(
             "🤖 Gold/Silver NotiBot đã khởi động!\n"
             f"📊 Delta: {self._format_delta(self.config.delta_gold)} (Gold), "
             f"{self._format_delta(self.config.delta_silver)} (Silver)\n"
@@ -221,10 +227,11 @@ class NotiBot:
             logger.info("Received keyboard interrupt")
         except Exception as e:
             logger.error(f"Bot error: {e}", exc_info=True)
-            self.dispatcher.send_message(f"❌ Bot error: {e}")
+            self.dispatcher.send_message_sync(f"❌ Bot error: {e}")
         finally:
             await self.price_fetcher.stop()
-            self.dispatcher.send_message("🛑 Gold/Silver NotiBot đã dừng.")
+            self.dispatcher.send_message_sync("🛑 Gold/Silver NotiBot đã dừng.")
+            self.dispatcher.stop_worker()
             logger.info("Bot stopped.")
 
     async def _command_loop(self):
