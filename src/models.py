@@ -46,6 +46,8 @@ class Alert:
     last_notified_price: float     # Giá lần thông báo gần nhất
     change: float                  # Biến động (current - last)
     change_percent: float          # Biến động %
+    gold_silver_ratio: float = 0.0 # G/S ratio hiện tại (dùng cho silver alert)
+    oil_x_silver: float = 0.0     # O×S hiện tại (dùng cho silver alert)
     timestamp: datetime = field(default_factory=datetime.now)
 
     @property
@@ -70,11 +72,16 @@ class Alert:
         time_str = self.timestamp.strftime("%H:%M:%S %d/%m/%Y")
         d = self.price_decimals
 
+        # Dòng biến động — silver ghi chung G/S ratio và O×S
+        change_line = f"📊 Biến động: {sign}{self.change:,.{d}f} ({sign}{self.change_percent:.2f}%)"
+        if self.symbol == "silver":
+            change_line += f" | ⚖️ G/S: {self.gold_silver_ratio} | 📐 O×S: {self.oil_x_silver:,.2f}"
+
         return (
             f"{self.symbol_display} {self.direction}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"💰 Giá: {self.current_price:,.{d}f}\n"
-            f"📊 Biến động: {sign}{self.change:,.{d}f} ({sign}{self.change_percent:.2f}%)\n"
+            f"{change_line}\n"
             f"📍 Giá trước: {self.last_notified_price:,.{d}f}\n"
             f"🕐 {time_str}"
         )

@@ -60,6 +60,8 @@ class AlertEngine:
                 current_price=current_price,
                 last_notified=self._last_notified[symbol],
                 timestamp=price_data.timestamp,
+                gold_silver_ratio=price_data.gold_silver_ratio,
+                oil_x_silver=price_data.oil_x_silver,
             )
             if alert:
                 self._last_notified[symbol] = current_price
@@ -73,6 +75,8 @@ class AlertEngine:
         current_price: float,
         last_notified: float,
         timestamp: datetime,
+        gold_silver_ratio: float = 0.0,
+        oil_x_silver: float = 0.0,
     ) -> Optional[Alert]:
         """Kiểm tra 1 symbol cụ thể"""
         if last_notified <= 0:
@@ -92,6 +96,8 @@ class AlertEngine:
                 last_notified_price=last_notified,
                 change=change,
                 change_percent=change_percent,
+                gold_silver_ratio=gold_silver_ratio,
+                oil_x_silver=oil_x_silver,
                 timestamp=timestamp,
             )
             logger.info(
