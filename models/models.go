@@ -55,6 +55,8 @@ type Alert struct {
 	LastNotifiedPrice float64
 	Change            float64
 	ChangePercent     float64
+	GoldSilverRatio   float64
+	OilXSilver        float64
 	Timestamp         time.Time
 }
 
@@ -99,15 +101,20 @@ func (a *Alert) FormatMessage() string {
 	changeStr := formatNumber(a.Change, priceFmt)
 	lastPriceStr := formatNumber(a.LastNotifiedPrice, priceFmt)
 
+	changeLine := fmt.Sprintf("📊 Biến động: %s%s (%s%.2f%%)", sign, changeStr, sign, a.ChangePercent)
+	if a.Symbol == "silver" {
+		changeLine += fmt.Sprintf(" | ⚖️ G/S: %.1f | 📐 O×S: %.2f", a.GoldSilverRatio, a.OilXSilver)
+	}
+
 	return fmt.Sprintf("%s %s\n"+
 		"━━━━━━━━━━━━━━━━━━\n"+
 		"💰 Giá: %s\n"+
-		"📊 Biến động: %s%s (%s%.2f%%)\n"+
+		"%s\n"+
 		"📍 Giá trước: %s\n"+
 		"🕐 %s",
 		a.SymbolDisplay(), a.Direction(),
 		currentPriceStr,
-		sign, changeStr, sign, a.ChangePercent,
+		changeLine,
 		lastPriceStr,
 		timeStr,
 	)

@@ -1,0 +1,143 @@
+﻿diff --git a/.env copy.example b/.env copy.example
+deleted file mode 100644
+index 7dfd970..0000000
+--- a/.env copy.example	
++++ /dev/null
+@@ -1,6 +0,0 @@
+-# Telegram Bot
+-TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+-TELEGRAM_CHAT_ID=your_chat_id_here
+-
+-# Discord Webhook
+-DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/your_webhook_url_here
+diff --git a/fetcher/fetcher.go b/fetcher/fetcher.go
+index d02262e..b190a89 100644
+--- a/fetcher/fetcher.go
++++ b/fetcher/fetcher.go
+@@ -94,17 +94,11 @@ func (f *PriceFetcher) oilPollingLoop() {
+ 	}
+ }
+ 
+-type yahooQuoteResponse struct {
+-	QuoteResponse struct {
+-		Result []struct {
+-			RegularMarketPrice float64 `json:"regularMarketPrice"`
+-		} `json:"result"`
+-	} `json:"quoteResponse"`
+-}
++
+ 
+ func (f *PriceFetcher) fetchOilPrice() (float64, error) {
+ 	// Yahoo Finance V7 API for quotes
+-	url := "https://query1.finance.yahoo.com/v7/finance/quote?symbols=CL=F"
++	url := "https://query2.finance.yahoo.com/v8/finance/chart/CL=F"
+ 	
+ 	req, err := http.NewRequest("GET", url, nil)
+ 	if err != nil {
+@@ -129,15 +123,37 @@ func (f *PriceFetcher) fetchOilPrice() (float64, error) {
+ 		return 0, err
+ 	}
+ 
+-	var data yahooQuoteResponse
++	var data map[string]interface{}
+ 	if err := json.Unmarshal(body, &data); err != nil {
+ 		return 0, err
+ 	}
+ 
+-	if len(data.QuoteResponse.Result) > 0 {
+-		return data.QuoteResponse.Result[0].RegularMarketPrice, nil
++	chart, ok := data["chart"].(map[string]interface{})
++	if !ok {
++		return 0, fmt.Errorf("no chart object in response")
++	}
++
++	resultArr, ok := chart["result"].([]interface{})
++	if !ok || len(resultArr) == 0 {
++		return 0, fmt.Errorf("no result array in response")
++	}
++
++	result, ok := resultArr[0].(map[string]interface{})
++	if !ok {
++		return 0, fmt.Errorf("invalid result object")
++	}
++
++	meta, ok := result["meta"].(map[string]interface{})
++	if !ok {
++		return 0, fmt.Errorf("no meta object in result")
+ 	}
+-	return 0, fmt.Errorf("no quote data returned")
++
++	price, ok := meta["regularMarketPrice"].(float64)
++	if !ok {
++		return 0, fmt.Errorf("regularMarketPrice not found or not a float64")
++	}
++
++	return price, nil
+ }
+ 
+ // parse binance websocket JSON
+diff --git a/notibot.exe b/notibot.exe
+index 33e8015..425675b 100644
+Binary files a/notibot.exe and b/notibot.exe differ
+diff --git a/src/alert_engine.py b/src/alert_engine.py
+index 59292bb..059d591 100644
+--- a/src/alert_engine.py
++++ b/src/alert_engine.py
+@@ -60,6 +60,8 @@ class AlertEngine:
+                 current_price=current_price,
+                 last_notified=self._last_notified[symbol],
+                 timestamp=price_data.timestamp,
++                gold_silver_ratio=price_data.gold_silver_ratio,
++                oil_x_silver=price_data.oil_x_silver,
+             )
+             if alert:
+                 self._last_notified[symbol] = current_price
+@@ -73,6 +75,8 @@ class AlertEngine:
+         current_price: float,
+         last_notified: float,
+         timestamp: datetime,
++        gold_silver_ratio: float = 0.0,
++        oil_x_silver: float = 0.0,
+     ) -> Optional[Alert]:
+         """Kiß╗âm tra 1 symbol cß╗Ñ thß╗â"""
+         if last_notified <= 0:
+@@ -92,6 +96,8 @@ class AlertEngine:
+                 last_notified_price=last_notified,
+                 change=change,
+                 change_percent=change_percent,
++                gold_silver_ratio=gold_silver_ratio,
++                oil_x_silver=oil_x_silver,
+                 timestamp=timestamp,
+             )
+             logger.info(
+diff --git a/src/models.py b/src/models.py
+index 9d2bc34..b116e97 100644
+--- a/src/models.py
++++ b/src/models.py
+@@ -46,6 +46,8 @@ class Alert:
+     last_notified_price: float     # Gi├í lß║ºn th├┤ng b├ío gß║ºn nhß║Ñt
+     change: float                  # Biß║┐n ─æß╗Öng (current - last)
+     change_percent: float          # Biß║┐n ─æß╗Öng %
++    gold_silver_ratio: float = 0.0 # G/S ratio hiß╗çn tß║íi (d├╣ng cho silver alert)
++    oil_x_silver: float = 0.0     # O├ùS hiß╗çn tß║íi (d├╣ng cho silver alert)
+     timestamp: datetime = field(default_factory=datetime.now)
+ 
+     @property
+@@ -70,11 +72,16 @@ class Alert:
+         time_str = self.timestamp.strftime("%H:%M:%S %d/%m/%Y")
+         d = self.price_decimals
+ 
++        # D├▓ng biß║┐n ─æß╗Öng ΓÇö silver ghi chung G/S ratio v├á O├ùS
++        change_line = f"≡ƒôè Biß║┐n ─æß╗Öng: {sign}{self.change:,.{d}f} ({sign}{self.change_percent:.2f}%)"
++        if self.symbol == "silver":
++            change_line += f" | ΓÜû∩╕Å G/S: {self.gold_silver_ratio} | ≡ƒôÉ O├ùS: {self.oil_x_silver:,.2f}"
++
+         return (
+             f"{self.symbol_display} {self.direction}\n"
+             f"ΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöüΓöü\n"
+             f"≡ƒÆ░ Gi├í: {self.current_price:,.{d}f}\n"
+-            f"≡ƒôè Biß║┐n ─æß╗Öng: {sign}{self.change:,.{d}f} ({sign}{self.change_percent:.2f}%)\n"
++            f"{change_line}\n"
+             f"≡ƒôì Gi├í tr╞░ß╗¢c: {self.last_notified_price:,.{d}f}\n"
+             f"≡ƒòÉ {time_str}"
+         )
