@@ -1,11 +1,11 @@
 """
-Alert Engine — delta-based alert logic
+Alert Engine — delta-based alert logic for Oil, Gold, Silver, Gold/Silver Ratio, Oil×Silver
 """
 import logging
 from datetime import datetime
 from typing import Optional
 
-from src.config import Config
+from src.config import Config, ALL_SYMBOLS
 from src.models import PriceData, Alert
 
 logger = logging.getLogger(__name__)
@@ -16,59 +16,54 @@ class AlertEngine:
     So sánh giá hiện tại với giá thông báo gần nhất.
     Nếu biến động ≥ delta X → tạo Alert.
     Sau khi alert, cập nhật lastNotifiedPrice = currentPrice.
+
+    Hỗ trợ: oil, gold, silver, gold_silver_ratio, oil_x_silver
     """
 
     def __init__(self, config: Config):
         self.config = config
 
-        # Giá được thông báo gần nhất (in-memory, mất khi restart)
-        self._last_notified_gold: Optional[float] = None
-        self._last_notified_silver: Optional[float] = None
+        # Giá được thông báo gần nhất cho mỗi symbol (in-memory)
+        self._last_notified: dict[str, Optional[float]] = {
+            symbol: None for symbol in ALL_SYMBOLS
+        }
+
+    def _get_price(self, symbol: str, price_data: PriceData) -> float:
+        """Lấy giá tương ứng với symbol từ PriceData"""
+        return getattr(price_data, symbol, 0.0)
 
     def check(self, price_data: PriceData) -> list[Alert]:
         """
-        Kiểm tra xem giá có biến động đủ ngưỡng không.
+        Kiểm tra tất cả symbols xem có biến động đủ ngưỡng không.
 
         Args:
             price_data: dữ liệu giá hiện tại
 
         Returns:
-            Danh sách Alert (có thể rỗng, 1, hoặc 2 alerts)
+            Danh sách Alert (có thể rỗng)
         """
         alerts: list[Alert] = []
 
-        # Lần đầu nhận giá → set baseline, không alert
-        if self._last_notified_gold is None:
-            self._last_notified_gold = price_data.gold
-            logger.info(f"Gold baseline set: ${price_data.gold:,.2f}")
+        for symbol in ALL_SYMBOLS:
+            current_price = self._get_price(symbol, price_data)
+            if current_price <= 0:
+                continue
 
-        if self._last_notified_silver is None:
-            self._last_notified_silver = price_data.silver
-            logger.info(f"Silver baseline set: ${price_data.silver:,.2f}")
+            # Lần đầu nhận giá → set baseline, không alert
+            if self._last_notified[symbol] is None:
+                self._last_notified[symbol] = current_price
+                logger.info(f"{symbol} baseline set: {current_price:,.2f}")
+                continue
 
-        # Check gold
-        gold_alert = self._check_symbol(
-            symbol="gold",
-            current_price=price_data.gold,
-            last_notified=self._last_notified_gold,
-            ratio=price_data.ratio,
-            timestamp=price_data.timestamp,
-        )
-        if gold_alert:
-            self._last_notified_gold = price_data.gold
-            alerts.append(gold_alert)
-
-        # Check silver
-        silver_alert = self._check_symbol(
-            symbol="silver",
-            current_price=price_data.silver,
-            last_notified=self._last_notified_silver,
-            ratio=price_data.ratio,
-            timestamp=price_data.timestamp,
-        )
-        if silver_alert:
-            self._last_notified_silver = price_data.silver
-            alerts.append(silver_alert)
+            alert = self._check_symbol(
+                symbol=symbol,
+                current_price=current_price,
+                last_notified=self._last_notified[symbol],
+                timestamp=price_data.timestamp,
+            )
+            if alert:
+                self._last_notified[symbol] = current_price
+                alerts.append(alert)
 
         return alerts
 
@@ -77,7 +72,6 @@ class AlertEngine:
         symbol: str,
         current_price: float,
         last_notified: float,
-        ratio: float,
         timestamp: datetime,
     ) -> Optional[Alert]:
         """Kiểm tra 1 symbol cụ thể"""
@@ -98,12 +92,11 @@ class AlertEngine:
                 last_notified_price=last_notified,
                 change=change,
                 change_percent=change_percent,
-                ratio=ratio,
                 timestamp=timestamp,
             )
             logger.info(
                 f"ALERT: {symbol} changed {change:+,.2f} ({change_percent:+.2f}%) "
-                f"from ${last_notified:,.2f} to ${current_price:,.2f}"
+                f"from {last_notified:,.2f} to {current_price:,.2f}"
             )
             return alert
 

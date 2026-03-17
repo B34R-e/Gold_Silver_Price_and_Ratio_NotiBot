@@ -1,7 +1,10 @@
 {
     "delta": {
+        "oil": "1%",
         "gold": "0.25%",
-        "silver": 0.1
+        "silver": 0.1,
+        "gold_silver_ratio": 0.5,
+        "oil_x_silver": "1%"
     },
     "channels": [
         "telegram"

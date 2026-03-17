@@ -1,8 +1,8 @@
 """
-Gold/Silver Price & Ratio NotiBot — Main Entry Point
+Oil/Gold/Silver Price & Ratio NotiBot — Main Entry Point
 
-Bot nhận giá XAUUSDT + XAGUSDT realtime qua Binance Futures WebSocket,
-tính Gold/Silver Ratio, gửi thông báo qua Telegram + Discord khi giá biến động ≥ X.
+Bot nhận giá Oil (Yahoo Finance), Gold + Silver (Binance Futures WebSocket),
+tính Gold/Silver Ratio và Oil×Silver, gửi thông báo qua Telegram + Discord khi giá biến động ≥ X.
 """
 import asyncio
 import logging
@@ -10,8 +10,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from src.config import Config
-from src.models import PriceData
+from src.config import Config, ALL_SYMBOLS
+from src.models import PriceData, SYMBOL_INFO
 from src.price_fetcher import PriceFetcher
 from src.alert_engine import AlertEngine
 from src.notifier import NotificationDispatcher
@@ -35,13 +35,13 @@ class NotiBot:
 
     def __init__(self, config_path: str = "config.json", env_path: str = ".env"):
         logger.info("=" * 50)
-        logger.info("Gold/Silver NotiBot starting...")
+        logger.info("Oil/Gold/Silver NotiBot starting...")
         logger.info("=" * 50)
 
         # Load config
         self.config = Config(config_path=config_path, env_path=env_path)
-        logger.info(f"Delta Gold: {self.config.delta_gold}")
-        logger.info(f"Delta Silver: {self.config.delta_silver}")
+        for symbol in ALL_SYMBOLS:
+            logger.info(f"Delta {symbol}: {self.config.deltas[symbol]}")
         logger.info(f"Channels: {self.config.channels}")
 
         # Init modules
@@ -77,20 +77,25 @@ class NotiBot:
             return
 
         p = self._latest_price
-        gold_delta = self._format_delta(self.config.delta_gold)
-        silver_delta = self._format_delta(self.config.delta_silver)
         stats = self.dispatcher.stats
+
+        # Build delta info
+        delta_lines = []
+        for symbol in ALL_SYMBOLS:
+            delta_lines.append(f"  {symbol}: {self._format_delta(self.config.deltas[symbol])}")
+        delta_str = "\n".join(delta_lines)
 
         self.cmd_listener.reply(
             f"📊 Trạng thái NotiBot\n"
             f"━━━━━━━━━━━━━━━━━━\n"
+            f"🛢️ Dầu (WTI): ${p.oil:,.2f}\n"
             f"🥇 Vàng (XAU): ${p.gold:,.2f}\n"
             f"🥈 Bạc (XAG): ${p.silver:,.4f}\n"
-            f"⚖️ Ratio: {p.ratio}\n"
+            f"⚖️ Gold/Silver Ratio: {p.gold_silver_ratio}\n"
+            f"📐 Oil × Silver: {p.oil_x_silver:,.2f}\n"
             f"🕐 {p.timestamp.strftime('%H:%M:%S %d/%m/%Y')}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"⚙️ Delta Vàng: {gold_delta}\n"
-            f"⚙️ Delta Bạc: {silver_delta}\n"
+            f"⚙️ Delta:\n{delta_str}\n"
             f"📡 {self._price_count} updates | "
             f"📤 {stats['sent']} sent | ❌ {stats['failed']} failed | "
             f"📬 {self.dispatcher.queue_size} queued"
@@ -99,33 +104,45 @@ class NotiBot:
     def _cmd_delta(self, args: list[str]):
         """
         Xem hoặc thay đổi delta.
-        /delta            → xem hiện tại
-        /delta gold 0.5%  → đặt delta vàng = 0.5%
-        /delta silver 0.1 → đặt delta bạc = $0.1
+        /delta                        → xem hiện tại
+        /delta gold 0.5%              → đặt delta vàng = 0.5%
+        /delta silver 0.1             → đặt delta bạc = $0.1
+        /delta oil 1%                 → đặt delta dầu = 1%
+        /delta gold_silver_ratio 0.5  → đặt delta ratio = 0.5
+        /delta oil_x_silver 1%        → đặt delta oil×silver = 1%
         """
         if not args:
             # Xem delta hiện tại
-            gold_delta = self._format_delta(self.config.delta_gold)
-            silver_delta = self._format_delta(self.config.delta_silver)
+            lines = []
+            for symbol in ALL_SYMBOLS:
+                info = SYMBOL_INFO.get(symbol, {})
+                emoji = info.get("emoji", "📊")
+                name = info.get("name", symbol)
+                delta_str = self._format_delta(self.config.deltas[symbol])
+                lines.append(f"{emoji} {name}: {delta_str}")
             self.cmd_listener.reply(
-                f"⚙️ Delta hiện tại:\n"
-                f"🥇 Vàng: {gold_delta}\n"
-                f"🥈 Bạc: {silver_delta}\n\n"
+                f"⚙️ Delta hiện tại:\n" + "\n".join(lines) + "\n\n"
                 f"Cách dùng:\n"
+                f"/delta oil 1%\n"
                 f"/delta gold 0.5%\n"
-                f"/delta silver 0.1"
+                f"/delta silver 0.1\n"
+                f"/delta gold_silver_ratio 0.5\n"
+                f"/delta oil_x_silver 1%"
             )
             return
 
         if len(args) < 2:
-            self.cmd_listener.reply("❌ Cú pháp: /delta <gold|silver> <giá trị>\nVí dụ: /delta gold 0.5%")
+            self.cmd_listener.reply(
+                f"❌ Cú pháp: /delta <symbol> <giá trị>\n"
+                f"Symbols: {', '.join(ALL_SYMBOLS)}"
+            )
             return
 
         symbol = args[0].lower()
         value_str = args[1]
 
-        if symbol not in ("gold", "silver"):
-            self.cmd_listener.reply("❌ Symbol phải là 'gold' hoặc 'silver'")
+        if symbol not in ALL_SYMBOLS:
+            self.cmd_listener.reply(f"❌ Symbol phải là: {', '.join(ALL_SYMBOLS)}")
             return
 
         try:
@@ -135,17 +152,13 @@ class NotiBot:
             return
 
         # Cập nhật config in-memory + ghi file
-        if symbol == "gold":
-            self.config.delta_gold = new_delta
-        else:
-            self.config.delta_silver = new_delta
+        self.config.deltas[symbol] = new_delta
         self.config.save_to_file()
 
+        info = SYMBOL_INFO.get(symbol, {})
+        display_name = f"{info.get('emoji', '📊')} {info.get('name', symbol)}"
         formatted = self._format_delta(new_delta)
-        self.cmd_listener.reply(
-            f"✅ Đã cập nhật!\n"
-            f"{'🥇 Vàng' if symbol == 'gold' else '🥈 Bạc'}: delta = {formatted}"
-        )
+        self.cmd_listener.reply(f"✅ Đã cập nhật!\n{display_name}: delta = {formatted}")
         logger.info(f"Delta {symbol} updated via Telegram: {new_delta}")
 
     def _cmd_help(self, args: list[str]):
@@ -155,8 +168,8 @@ class NotiBot:
             "━━━━━━━━━━━━━━━━━━\n"
             "/status — Xem giá hiện tại + config\n"
             "/delta — Xem delta hiện tại\n"
-            "/delta gold 0.5% — Đặt delta vàng\n"
-            "/delta silver 0.1 — Đặt delta bạc\n"
+            "/delta <symbol> <value> — Đặt delta\n"
+            f"  Symbols: {', '.join(ALL_SYMBOLS)}\n"
             "/help — Hiển thị help này"
         )
 
@@ -170,7 +183,7 @@ class NotiBot:
     # ── Price callback ────────────────────────────────
 
     def _on_price_update(self, price_data: PriceData):
-        """Callback khi nhận giá mới từ WebSocket"""
+        """Callback khi nhận giá mới"""
         self._price_count += 1
         self._latest_price = price_data
 
@@ -180,9 +193,11 @@ class NotiBot:
             self.dispatcher.send_message(
                 f"📊 Giá hiện tại:\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
+                f"🛢️ Dầu (WTI): ${price_data.oil:,.2f}\n"
                 f"🥇 Vàng (XAU): ${price_data.gold:,.2f}\n"
                 f"🥈 Bạc (XAG): ${price_data.silver:,.4f}\n"
-                f"⚖️ Gold/Silver Ratio: {price_data.ratio}\n"
+                f"⚖️ Gold/Silver Ratio: {price_data.gold_silver_ratio}\n"
+                f"📐 Oil × Silver: {price_data.oil_x_silver:,.2f}\n"
                 f"🕐 {price_data.timestamp.strftime('%H:%M:%S %d/%m/%Y')}"
             )
 
@@ -190,9 +205,11 @@ class NotiBot:
         if self._price_count % 10 == 0:
             logger.info(
                 f"[#{self._price_count}] "
+                f"OIL: ${price_data.oil:,.2f} | "
                 f"XAU: ${price_data.gold:,.2f} | "
                 f"XAG: ${price_data.silver:,.4f} | "
-                f"Ratio: {price_data.ratio}"
+                f"G/S: {price_data.gold_silver_ratio} | "
+                f"O×S: {price_data.oil_x_silver:,.2f}"
             )
 
         # Kiểm tra alerts
@@ -203,21 +220,26 @@ class NotiBot:
     # ── Run ────────────────────────────────
 
     async def run(self):
-        """Chạy bot — WebSocket + Command polling + Heartbeat"""
+        """Chạy bot — WebSocket + Oil polling + Command polling + Heartbeat"""
         # Khởi động notification worker (background thread)
         self.dispatcher.start_worker()
 
-        # Gửi startup message (đồng bộ — phải gửi xong trước khi tiếp tục)
+        # Build delta summary
+        delta_parts = []
+        for symbol in ALL_SYMBOLS:
+            delta_parts.append(f"{symbol}: {self._format_delta(self.config.deltas[symbol])}")
+        delta_summary = ", ".join(delta_parts)
+
+        # Gửi startup message
         self.dispatcher.send_message_sync(
-            "🤖 Gold/Silver NotiBot đã khởi động!\n"
-            f"📊 Delta: {self._format_delta(self.config.delta_gold)} (Gold), "
-            f"{self._format_delta(self.config.delta_silver)} (Silver)\n"
+            f"🤖 Oil/Gold/Silver NotiBot đã khởi động!\n"
+            f"📊 Delta: {delta_summary}\n"
             f"📣 Channels: {', '.join(self.config.channels)}\n"
             f"💬 Commands: /status /delta /help"
         )
 
         try:
-            # Chạy song song: WebSocket + Command listener + Heartbeat
+            # Chạy song song: Price fetcher (WS + oil poll) + Command listener + Heartbeat
             await asyncio.gather(
                 self.price_fetcher.start(),
                 self._command_loop(),
@@ -230,7 +252,7 @@ class NotiBot:
             self.dispatcher.send_message_sync(f"❌ Bot error: {e}")
         finally:
             await self.price_fetcher.stop()
-            self.dispatcher.send_message_sync("🛑 Gold/Silver NotiBot đã dừng.")
+            self.dispatcher.send_message_sync("🛑 Oil/Gold/Silver NotiBot đã dừng.")
             self.dispatcher.stop_worker()
             logger.info("Bot stopped.")
 
@@ -258,8 +280,8 @@ class NotiBot:
                 if self._latest_price:
                     p = self._latest_price
                     price_info = (
-                        f"\n🥇 XAU: ${p.gold:,.2f} | 🥈 XAG: ${p.silver:,.4f}\n"
-                        f"⚖️ Ratio: {p.ratio}"
+                        f"\n🛢️ OIL: ${p.oil:,.2f} | 🥇 XAU: ${p.gold:,.2f} | 🥈 XAG: ${p.silver:,.4f}\n"
+                        f"⚖️ G/S: {p.gold_silver_ratio} | 📐 O×S: {p.oil_x_silver:,.2f}"
                     )
                 self.dispatcher.send_message(
                     f"❤️ Bot đang hoạt động{price_info}\n"

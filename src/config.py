@@ -7,6 +7,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+# Tất cả symbols hỗ trợ delta
+ALL_SYMBOLS = ("oil", "gold", "silver", "gold_silver_ratio", "oil_x_silver")
+
+
 class Config:
     """Quản lý cấu hình từ config.json và .env"""
 
@@ -27,9 +31,12 @@ class Config:
         # Store config path for saving
         self._config_path = config_path
 
-        # Parse delta config
-        self.delta_gold = self._parse_delta(self._data.get("delta", {}).get("gold", "0.25%"))
-        self.delta_silver = self._parse_delta(self._data.get("delta", {}).get("silver", "0.25%"))
+        # Parse delta config cho mỗi symbol
+        delta_cfg = self._data.get("delta", {})
+        self.deltas: dict[str, dict] = {}
+        for symbol in ALL_SYMBOLS:
+            raw = delta_cfg.get(symbol, "1%")  # default 1%
+            self.deltas[symbol] = self._parse_delta(raw)
 
         # Channels
         self.channels: list[str] = self._data.get("channels", ["telegram", "discord"])
@@ -41,9 +48,10 @@ class Config:
 
     def save_to_file(self):
         """Ghi config hiện tại (delta) lại vào config.json"""
-        # Chuyển delta ngược lại thành format config
-        self._data["delta"]["gold"] = self._delta_to_config(self.delta_gold)
-        self._data["delta"]["silver"] = self._delta_to_config(self.delta_silver)
+        delta_out = {}
+        for symbol, delta in self.deltas.items():
+            delta_out[symbol] = self._delta_to_config(delta)
+        self._data["delta"] = delta_out
 
         with open(self._config_path, "w", encoding="utf-8") as f:
             json.dump(self._data, f, indent=4, ensure_ascii=False)
@@ -77,13 +85,13 @@ class Config:
         Tính ngưỡng biến động thực tế dựa trên config delta.
 
         Args:
-            symbol: 'gold' hoặc 'silver'
+            symbol: 'oil', 'gold', 'silver', 'gold_silver_ratio', 'oil_x_silver'
             current_price: giá hiện tại (dùng nếu delta là %)
 
         Returns:
-            Ngưỡng tuyệt đối (USD)
+            Ngưỡng tuyệt đối
         """
-        delta = self.delta_gold if symbol == "gold" else self.delta_silver
+        delta = self.deltas.get(symbol, {"type": "percent", "value": 0.01})
 
         if delta["type"] == "percent":
             return current_price * delta["value"]
