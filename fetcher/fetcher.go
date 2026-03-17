@@ -94,17 +94,11 @@ func (f *PriceFetcher) oilPollingLoop() {
 	}
 }
 
-type yahooQuoteResponse struct {
-	QuoteResponse struct {
-		Result []struct {
-			RegularMarketPrice float64 `json:"regularMarketPrice"`
-		} `json:"result"`
-	} `json:"quoteResponse"`
-}
+
 
 func (f *PriceFetcher) fetchOilPrice() (float64, error) {
 	// Yahoo Finance V7 API for quotes
-	url := "https://query1.finance.yahoo.com/v7/finance/quote?symbols=CL=F"
+	url := "https://query2.finance.yahoo.com/v8/finance/chart/CL=F"
 	
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -129,15 +123,37 @@ func (f *PriceFetcher) fetchOilPrice() (float64, error) {
 		return 0, err
 	}
 
-	var data yahooQuoteResponse
+	var data map[string]interface{}
 	if err := json.Unmarshal(body, &data); err != nil {
 		return 0, err
 	}
 
-	if len(data.QuoteResponse.Result) > 0 {
-		return data.QuoteResponse.Result[0].RegularMarketPrice, nil
+	chart, ok := data["chart"].(map[string]interface{})
+	if !ok {
+		return 0, fmt.Errorf("no chart object in response")
 	}
-	return 0, fmt.Errorf("no quote data returned")
+
+	resultArr, ok := chart["result"].([]interface{})
+	if !ok || len(resultArr) == 0 {
+		return 0, fmt.Errorf("no result array in response")
+	}
+
+	result, ok := resultArr[0].(map[string]interface{})
+	if !ok {
+		return 0, fmt.Errorf("invalid result object")
+	}
+
+	meta, ok := result["meta"].(map[string]interface{})
+	if !ok {
+		return 0, fmt.Errorf("no meta object in result")
+	}
+
+	price, ok := meta["regularMarketPrice"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("regularMarketPrice not found or not a float64")
+	}
+
+	return price, nil
 }
 
 // parse binance websocket JSON
