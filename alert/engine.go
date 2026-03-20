@@ -93,6 +93,9 @@ func (e *Engine) checkSymbol(symbol string, current, last float64, data models.P
 			ChangePercent:     changePercent,
 			GoldSilverRatio:   data.GoldSilverRatio,
 			OilXSilver:        data.OilXSilver,
+			Gold:              data.Gold,
+			Silver:            data.Silver,
+			Oil:               data.Oil,
 			Timestamp:         data.Timestamp,
 		}
 		log.Printf("ALERT: %s changed %+.2f (%+.2f%%) from %.2f to %.2f",

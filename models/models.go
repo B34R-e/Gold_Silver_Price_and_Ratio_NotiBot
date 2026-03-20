@@ -57,6 +57,9 @@ type Alert struct {
 	ChangePercent     float64
 	GoldSilverRatio   float64
 	OilXSilver        float64
+	Gold              float64
+	Silver            float64
+	Oil               float64
 	Timestamp         time.Time
 }
 
@@ -83,41 +86,38 @@ func (a *Alert) FormatMessage() string {
 	timeStr := a.Timestamp.Format("15:04:05 02/01/2006")
 
 	decimals := 2
+	emoji := "📊"
 	if info, ok := SymbolMetadata[a.Symbol]; ok {
 		decimals = info.Decimals
+		emoji = info.Emoji
 	}
 
-	// Create format strings dynamically based on decimal requirements
-	priceFmt := fmt.Sprintf("%%.,%df", decimals)
-	if decimals == 1 {
-		priceFmt = "%.1f"
-	} else if decimals == 2 {
-		priceFmt = "%.2f" // We will implement a comma formatter for real thousands separator if needed, for simplicity basic formatting first.
-	} else if decimals == 4 {
-		priceFmt = "%.4f"
-	}
-
+	priceFmt := fmt.Sprintf("%%.%df", decimals)
 	currentPriceStr := formatNumber(a.CurrentPrice, priceFmt)
 	changeStr := formatNumber(a.Change, priceFmt)
-	lastPriceStr := formatNumber(a.LastNotifiedPrice, priceFmt)
 
-	changeLine := fmt.Sprintf("📊 Biến động: %s%s (%s%.2f%%)", sign, changeStr, sign, a.ChangePercent)
-	if a.Symbol == "silver" {
-		changeLine += fmt.Sprintf(" | ⚖️ G/S: %.1f | 📐 O×S: %.2f", a.GoldSilverRatio, a.OilXSilver)
+	// Line 1: Main alerted symbol
+	// e.g. 🥈78.71 -0.10
+	line1 := fmt.Sprintf("%s%s %s%s", emoji, currentPriceStr, sign, changeStr)
+
+	// Line 2: The other two main assets
+	var line2 string
+	switch a.Symbol {
+	case "oil":
+		line2 = fmt.Sprintf("🥇 %.2f 🥈 %.4f", a.Gold, a.Silver)
+	case "gold":
+		line2 = fmt.Sprintf("🥈 %.4f 🛢️%.2f", a.Silver, a.Oil)
+	case "silver":
+		fallthrough
+	default:
+		// Default to showing Gold and Oil
+		line2 = fmt.Sprintf("🥇 %.2f 🛢️%.2f", a.Gold, a.Oil)
 	}
 
-	return fmt.Sprintf("%s %s\n"+
-		"━━━━━━━━━━━━━━━━━━\n"+
-		"💰 Giá: %s\n"+
-		"%s\n"+
-		"📍 Giá trước: %s\n"+
-		"🕐 %s",
-		a.SymbolDisplay(), a.Direction(),
-		currentPriceStr,
-		changeLine,
-		lastPriceStr,
-		timeStr,
-	)
+	// Line 3: Ratios
+	line3 := fmt.Sprintf("G/S: %.1f O×S: %.0f", a.GoldSilverRatio, a.OilXSilver)
+
+	return fmt.Sprintf("%s\n%s\n%s\n\n🕐 %s", line1, line2, line3, timeStr)
 }
 
 // Helper func to format number with commas roughly. Go doesn't have a built-in one for floats that's trivial.
